@@ -18,6 +18,7 @@ def load_and_preprocess_data(url):
     
     transactions = []
     all_menus = set()
+    menu_counts = {}  # 개별 메뉴별 총 등장 일수 저장
     
     for row in df["메뉴"].dropna():
         # 괄호 및 괄호 안의 내용 제거 (예: 김치(10.12) -> 김치)
@@ -29,10 +30,12 @@ def load_and_preprocess_data(url):
         if items:
             transactions.append(items)
             all_menus.update(items)
+            for item in items:
+                menu_counts[item] = menu_counts.get(item, 0) + 1
             
-    return transactions, sorted(list(all_menus))
+    return transactions, sorted(list(all_menus)), menu_counts
 
-transactions, unique_menus = load_and_preprocess_data(DATA_URL)
+transactions, unique_menus, menu_counts = load_and_preprocess_data(DATA_URL)
 
 # 2. 연관 규칙 분석 (One-hot Encoding & Apriori)
 te = TransactionEncoder()
@@ -40,7 +43,7 @@ te_ary = te.fit(transactions).transform(transactions)
 df_encoded = pd.DataFrame(te_ary, columns=te.columns_)
 
 # 최소 지지도(min_support)를 설정하여 빈발 항목집합 도출 (최대 2개 항목 쌍 기준)
-frequent_itemsets = apriori(df_encoded, min_support=2/len(transactions), use_colnames=True)
+frequent_itemsets = apriori(df_encoded, min_support=1/len(transactions), use_colnames=True)
 
 # 연관 규칙 생성
 rules = association_rules(frequent_itemsets, metric="support", min_threshold=0.0, num_itemsets=len(frequent_itemsets))
@@ -66,54 +69,12 @@ st.sidebar.header("🔍 검색 및 정렬 옵션")
 # 메뉴 선택 옵션 (전체 보기 포함)
 selected_menu = st.sidebar.selectbox("특정 메뉴 검색", ["전체"] + unique_menus)
 
+# 최소 동시 일수 슬라이더 (1~10일, 기본값 1)
+min_cooccurrence = st.sidebar.slider("최소 동시 일수 설정", min_value=1, max_value=10, value=1, step=1)
+
 # 정렬 기준 선택
 sort_by = st.sidebar.radio("정렬 기준", ["향상도 순", "신뢰도 순", "동시 순"])
 sort_column_map = {"향상도 순": "향상도", "신뢰도 순": "신뢰도", "동시 순": "동시"}
 
 # 4. 데이터 필터링 및 정렬
-filtered_rules = rules_df.copy()
-
-if selected_menu != "전체":
-    filtered_rules = filtered_rules[
-        (filtered_rules["조건"] == selected_menu) | (filtered_rules["결과"] == selected_menu)
-    ]
-
-filtered_rules = filtered_rules.sort_values(by=sort_column_map[sort_by], ascending=False)
-
-# 5. 메인 화면 - 통계 요약 (한 줄 출력)
-total_days = len(transactions)
-total_menu_types = len(unique_menus)
-total_pairs = len(filtered_rules)
-
-st.markdown(f"**급식 일수:** {total_days}일 | **메뉴 종류 수:** {total_menu_types}개 | **함께 나온 적이 있는 메뉴 쌍의 수:** {total_pairs}개")
-st.divider()
-
-# 6. 향상도 상위 10개 가로 막대그래프 (Plotly)
-st.subheader("📊 향상도 상위 10개 메뉴 쌍")
-
-if not filtered_rules.empty:
-    # 향상도 기준 상위 10개 추출
-    top10_rules = filtered_rules.sort_values(by="향상도", ascending=False).head(10).copy()
-    top10_rules["규칙"] = top10_rules["조건"] + " ➔ " + top10_rules["결과"]
-    
-    # 가로 막대그래프 생성을 위해 y축 순서 정렬
-    top10_rules = top10_rules.sort_values(by="향상도", ascending=True)
-
-    fig = px.bar(
-        top10_rules,
-        x="향상도",
-        y="규칙",
-        orientation="h",
-        text="향상도",
-        title=f"향상도 TOP 10 {'(' + selected_menu + ' 선택됨)' if selected_menu != '전체' else ''}",
-        labels={"향상도": "향상도 (Lift)", "규칙": "메뉴 규칙 (조건 ➔ 결과)"}
-    )
-    fig.update_traces(textposition="outside")
-    fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("선택한 메뉴에 대한 연관 규칙 데이터가 없습니다.")
-
-# 7. 데이터 표 출력
-st.subheader("📋 메뉴 연관 규칙 표")
-st.dataframe(filtered_rules, use_container_width=True, hide_index=True)
+filtered_rules = rules_df.copy
