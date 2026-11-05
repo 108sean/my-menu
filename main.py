@@ -77,4 +77,87 @@ sort_by = st.sidebar.radio("정렬 기준", ["향상도 순", "신뢰도 순", "
 sort_column_map = {"향상도 순": "향상도", "신뢰도 순": "신뢰도", "동시 순": "동시"}
 
 # 4. 데이터 필터링 및 정렬
-filtered_rules = rules_df.copy
+filtered_rules = rules_df.copy()
+
+# 최소 동시 일수 필터링
+filtered_rules = filtered_rules[filtered_rules["동시"] >= min_cooccurrence]
+
+# 특정 메뉴 필터링
+if selected_menu != "전체":
+    filtered_rules = filtered_rules[
+        (filtered_rules["조건"] == selected_menu) | (filtered_rules["결과"] == selected_menu)
+    ]
+
+filtered_rules = filtered_rules.sort_values(by=sort_column_map[sort_by], ascending=False)
+
+# 5. 메인 화면 - 통계 요약 (한 줄 출력)
+total_days = len(transactions)
+total_menu_types = len(unique_menus)
+total_pairs = len(filtered_rules)
+
+st.markdown(f"**급식 일수:** {total_days}일 | **메뉴 종류 수:** {total_menu_types}개 | **함께 나온 적이 있는 메뉴 쌍의 수:** {total_pairs}개")
+st.info(f"💡 현재 설정된 최소 동시 일수({min_cooccurrence}일 이상) 기준 필터링 결과 **{total_pairs}개**의 규칙이 남아있습니다.")
+st.divider()
+
+# 6. 향상도 상위 10개 가로 막대그래프 (Plotly)
+st.subheader("📊 향상도 상위 10개 메뉴 쌍")
+
+if not filtered_rules.empty:
+    # 향상도 기준 상위 10개 추출
+    top10_rules = filtered_rules.sort_values(by="향상도", ascending=False).head(10).copy()
+    top10_rules["규칙"] = top10_rules["조건"] + " ➔ " + top10_rules["결과"]
+    
+    # 가로 막대그래프 생성을 위해 y축 순서 정렬
+    top10_rules = top10_rules.sort_values(by="향상도", ascending=True)
+
+    fig = px.bar(
+        top10_rules,
+        x="향상도",
+        y="규칙",
+        orientation="h",
+        text="향상도",
+        title=f"향상도 TOP 10 {'(' + selected_menu + ' 선택됨)' if selected_menu != '전체' else ''}",
+        labels={"향상도": "향상도 (Lift)", "규칙": "메뉴 규칙 (조건 ➔ 결과)"}
+    )
+    fig.update_traces(textposition="outside")
+    fig.update_layout(height=400, margin=dict(l=20, r=20, t=40, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("선택한 조건에 해당하는 연관 규칙 데이터가 없습니다.")
+
+# 7. 데이터 표 출력
+st.subheader("📋 메뉴 연관 규칙 표")
+st.dataframe(filtered_rules, use_container_width=True, hide_index=True)
+
+st.divider()
+
+# 8. 함께 나온 적 없는 짝 찾기 화면
+st.subheader("❓ 함께 나온 적 없는 짝 찾기")
+st.write("메뉴를 고르면 해당 메뉴와 같은 날 한 번도 나온 적 없으면서, 혼자서는 10일 이상 나온 메뉴 목록을 보여줍니다.")
+
+unpaired_target_menu = st.selectbox("기준 메뉴 선택 (함께 안 나온 짝 조회)", unique_menus, key="unpaired_select")
+
+if unpaired_target_menu:
+    target_count = menu_counts.get(unpaired_target_menu, 0)
+    st.markdown(f"📌 **{unpaired_target_menu}** (이)가 나온 날 수: **{target_count}일**")
+    
+    # 해당 메뉴와 한번이라도 같이 나온 메뉴 목록 추출
+    co_occurred_menus = set(
+        rules_df[rules_df["조건"] == unpaired_target_menu]["결과"].tolist() +
+        rules_df[rules_df["결과"] == unpaired_target_menu]["조건"].tolist()
+    )
+    
+    # 조건 만족 메뉴 필터링:
+    # 1. 본인 제외
+    # 2. 같이 나온 적 없는 메뉴 (co_occurred_menus에 없음)
+    # 3. 전체 출석 일수가 10일 이상인 메뉴
+    never_together = []
+    for menu, count in menu_counts.items():
+        if menu != unpaired_target_menu and menu not in co_occurred_menus and count >= 10:
+            never_together.append({"메뉴": menu, "제공 일수": count})
+            
+    if never_together:
+        never_together_df = pd.DataFrame(never_together).sort_values(by="제공 일수", ascending=False)
+        st.dataframe(never_together_df, use_container_width=True, hide_index=True)
+    else:
+        st.write("조건을 만족하는(한 번도 함께 나오지 않았고 10일 이상 제공된) 메뉴가 없습니다.")
